@@ -1,0 +1,43 @@
+setwd("~/Documents/PhD/dutch_carriage/")
+
+z <- read.table("carriage.pheno", sep="\t", stringsAsFactors = F)
+new_tr <- midpoint(car_tr)
+z <- read.table("carriage.pheno", sep="\t", stringsAsFactors = F)
+new_z <- as.numeric(new_z)
+names(new_z) <- z$V1
+
+patherit_ml <- ml.poumm(new_z, new_tr, distgr='maxlik', parMax=c(alpha=10, theta=10, sigma=10, sigmae=10))
+> print(patherit_ml$par)
+    alpha     theta     sigma    sigmae 
+5.2076417 0.3891072 1.4929862 0.0384819
+> H2.poumm(patherit_ml$par[1], patherit_ml$par[3], patherit_ml$par[4], t=Inf, tm=0)
+[1] 0.9931281
+> H2e.poumm(z=new_z, sigmae=patherit_ml$par[4])
+   sigmae 
+0.9937001
+
+mcmcfit <- mcmc.poumm(new_z, new_tr, n.mcmc=2e5, n.adapt=20000, thin=100, acc.rate=0.1,scale=matrix(c(400, 0.00, 0.00, 0.00, 0.00,  2.00,  0.00,  0.00, 0.00,  0.00,  0.02,  0.00, 0.00,  0.00,  0.00,  0.02), nrow=4, ncol=4, byrow=T),distgr = 'maxlik')
+
+mcmcAnalysis <- analyseMCMCs(chains = mcmcfit$chains, stat = function(par) {H2e.poumm(z=new_z, sigmae=sqrt(par[4]))}, statName='H2.OUe',start=1e5, end=2e5, thin=100)
+
+> mcmcAnalysis$Mode
+[1] 0.9936324
+> mcmcAnalysis$HPD
+[[1]]
+         lower     upper
+var1 0.9928038 0.9943273
+attr(,"Probability")
+[1] 0.95
+
+cpps <- analyseCPPs(new_z, new_tr, CPPthr=0.1)
+cpps$analysis.CPP[c('rA', 'bCI95lower', 'bCI95upper')]
+
+cpps$analysis.CPP[c('rA', 'bCI95lower', 'bCI95upper')]
+$rA
+[1] 0.9953417
+
+$bCI95lower
+[1] 0.9906834
+
+$bCI95upper
+[1] 0.9984245

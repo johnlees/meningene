@@ -1,0 +1,12 @@
+[submodule "tajima-D"]
+	path = tajima-D
+	url = git@github.com:johnlees/tajima-D.git
+[submodule "interaction"]
+	path = interaction
+	url = git@github.com:johnlees/epistasis-code.git
+[submodule "subtest"]
+	path = subtest
+	url = git@github.com:johnlees/subtest.git
+[submodule "ivr_model"]
+	path = ivr_model
+	url = git@github.com:johnlees/paired-samples.git
