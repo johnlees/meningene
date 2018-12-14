@@ -4,6 +4,7 @@ import re
 from collections import defaultdict, namedtuple
 
 import numpy as np
+import pandas as pd
 import limix
 from limix.stats import pca
 from numpy_sugar.linalg import economic_qs
@@ -24,7 +25,7 @@ def calc_var_comp(y, G_part, K_all, covar=None):
     glmm.covariance_matrices.append(K_part)
     glmm.covariance_matrices.append(K_resid)
     glmm.covariance_matrices.append_iid_noise()
-    glmm.fit(verbose=False)
+    glmm.fit(verbose=True)
 
     part_scale = glmm.covariance_matrices[0].scale
     resid_scale = glmm.covariance_matrices[1].scale
@@ -86,15 +87,25 @@ def main():
 
     # set up limix
     var_counts = np.sum(G_all, axis=1)
-    G_common = G_all[np.where((var_counts > 18) & (var_counts < 1819))[0], :]
+    #G_common = G_all[np.where((var_counts > 18) & (var_counts < 1819))[0], :].T
+    #np.save("G_common.npy", G_common)
+    G_common = np.load("G_common.npy")
 
-    r = limix.stats.pca(G_common, ncomp = 10)
+    r = limix.stats.pca(G_common.T, ncomp = 10)
     np.save("r_components.npy", r['components'])
     print("10 PCs variance explained: " + str(r['explained_variance_ratio']) + "\n")
+    r = np.load("r_components.npy")
 
-    K_all = np.dot(G_common, G_common.T)
-    np.save("K_all.npy", K_all)
-    print('h^2 %.3f' % limix.her.estimate(y, 'bernoulli', K, verbose=False))
+    #K_all = np.dot(G_common, G_common.T)
+    #np.save("K_all.npy", K_all)
+    #np.load("K_all.npy")
+
+    K = pd.read_table("nl_C_midpoint.txt", index_col = 0)
+    K = K.reindex(index=samples, columns=samples)
+    K_all = K.values
+
+    #print('h^2 %.3f' % limix.her.estimate(y, 'bernoulli', K_all, verbose=True))
+    #h^2 = 0.61
 
     # top PCs
     # for PCs (https://media.nature.com/original/nature-assets/srep/2016/160525/srep26471/extref/srep26471-s1.pdf)
@@ -103,12 +114,12 @@ def main():
     #   psi(A) = (1/(n-1))*(tr(A) - 1/n*A)
     QS = economic_qs(K_all)
 
-    glmm = GLMMExpFam(y, 'bernoulli', r['components'], QS)
-    glmm.fit(verbose=False)
+    glmm = GLMMExpFam(y, 'bernoulli', r.T, QS)
+    glmm.fit(verbose=True)
     rand_var = glmm.v0 + glmm.v1
     psi = lambda A, n: (1/(n - 1)) * (np.trace(A) - (1/n)*A)
     evY = psi(np.dot(y, y.T), len(y))
-    adjust = psi(np.dot(r['components'], np.dot(np.linalg.inv(np.dot(r['components'], r['components'])/rand_var), r['components'])), len(y))
+    adjust = psi(np.dot(r, np.dot(np.linalg.inv(np.dot(r.T, r)/rand_var), r.T)), len(y))
     print(evY - rand_var)
     print(evY - rand_var - adjust)
 
@@ -116,7 +127,7 @@ def main():
     #   w PCs
     #   w/o PCs
     sero_idx = np.where((positions >= 302490) & (positions <= 323780))[0]
-    G_sero = G_all[sero_idx,]
+    G_sero = G_all[sero_idx,].T
     print(calc_var_comp(y, G_sero, K_all, covar=None))
     print(calc_var_comp(y, G_sero, K_all, covar=r['components']))
 
@@ -140,13 +151,16 @@ def main():
         gene_G_ac3 = geneG[:, var_counts > 2]
         gene_burden_ac3.append(np.where(np.sum(gene_G_ac3, axis=0) > 0, 1, 0))
 
+    gene_burden = np.array(gene_burden).T
+    gene_burden_ac3 = np.array(gene_burden_ac3).T
+
     print(calc_var_comp(y, gene_burden, K_all, covar=None))
     print(calc_var_comp(y, gene_burden, K_all, covar=r['components']))
     print(calc_var_comp(y, gene_burden_ac3, K_all, covar=None))
 
     for gene_id, gene_G in zip(genes.keys(), gene_burden):
         print(gene_id)
-        print(calc_var_comp(y, gene_G, K_all, covar=None))
+        print(calc_var_comp(y, gene_G.T, K_all, covar=None))
 
 if __name__ == '__main__':
     main()
