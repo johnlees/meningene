@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import sys
 import re
 from collections import defaultdict, namedtuple
 
@@ -9,23 +10,28 @@ import limix
 from limix.stats import pca
 from numpy_sugar.linalg import economic_qs
 from glimix_core.glmm import GLMMExpFam
+from glimix_core.lmm import LMM
 
-def calc_var_comp(y, G_part, K_all, covar=None):
-    K_part = np.dot(G_part, G_part.T)
+def G_to_K(G):
+    if G.shape[0] > 10000:
+        sys.stderr.write("Very long G - has it been transposed?\n")
+    return(np.dot(G, G.t))
+
+def calc_var_comp(y, K_part, K_all, covar=None):
     K_resid = limix.qc.normalise_covariance(K_all - K_part)
     K_part = limix.qc.normalise_covariance(K_part)
 
     glmm = limix.glmm.GLMMComposer(len(y))
-    glmm.likname('bernoulli')
+    #glmm._likname = 'bernoulli'
     glmm.y = y
     glmm.fixed_effects.append_offset()
-    if covar:
+    if covar is not None:
         glmm.fixed_effects.append(covar)
 
     glmm.covariance_matrices.append(K_part)
     glmm.covariance_matrices.append(K_resid)
     glmm.covariance_matrices.append_iid_noise()
-    glmm.fit(verbose=True)
+    glmm.fit(verbose=False)
 
     part_scale = glmm.covariance_matrices[0].scale
     resid_scale = glmm.covariance_matrices[1].scale
@@ -39,6 +45,7 @@ def main():
     # read in genotype matrix (GT only)
     #G_all = np.loadtxt("nl_fixed.mat.csv", delimiter=",")
     #np.save("G_all.npy", G_all)
+    print("Reading input")
     G_all = np.load("G_all.npy")
 
     # read in metadata for genotype matrix
@@ -56,12 +63,12 @@ def main():
     with open('nl_fixed.pos.txt', 'r') as pos_file:
         for idx, line in enumerate(pos_file):
             (pos, ref, alt) = line.rstrip().split("\t")
-            positions.append(pos)
+            positions.append(int(pos))
 
             if pos in lofs.keys():
                 if ref == lofs[pos][0] and alt == lofs[pos][1]:
                     lof_loc.append(idx)
-    positions = np.array(positions)
+    positions = np.array(positions, dtype=int)
 
     # genes
     Gene = namedtuple('start', 'end')
@@ -74,7 +81,7 @@ def main():
 
 
     # Construct phenotype (special for NL data, as pheno can be inferred from sample name)
-    pheno = []
+    pheno  = []
     samples = []
     with open('vcf_sample_order.txt', 'r') as sample_file:
         for line in sample_file:
@@ -86,50 +93,84 @@ def main():
     y = np.array(pheno)
 
     # set up limix
+    print("Set up limix")
     var_counts = np.sum(G_all, axis=1)
     #G_common = G_all[np.where((var_counts > 18) & (var_counts < 1819))[0], :].T
     #np.save("G_common.npy", G_common)
     G_common = np.load("G_common.npy")
 
-    r = limix.stats.pca(G_common.T, ncomp = 10)
-    np.save("r_components.npy", r['components'])
-    print("10 PCs variance explained: " + str(r['explained_variance_ratio']) + "\n")
-    r = np.load("r_components.npy")
+    #r = limix.stats.pca(G_common.T, ncomp = 10)
+    #np.save("r_components.npy", r['components'])
+    #print("10 PCs variance explained: " + str(r['explained_variance_ratio']) + "\n")
+    r = np.load("r_components.npy").T
 
     #K_all = np.dot(G_common, G_common.T)
     #np.save("K_all.npy", K_all)
-    #np.load("K_all.npy")
+    K_all_vcf = np.load("K_all.npy")
 
-    K = pd.read_table("nl_C_midpoint.txt", index_col = 0)
+    #K = pd.read_table("nl_C_midpoint.txt", index_col = 0)
+    K = pd.read_table("nl_C_vcf_fasttree.txt", index_col = 0)
     K = K.reindex(index=samples, columns=samples)
-    K_all = K.values
+    K_all_tree = K.values
 
+    #print('h^2 %.3f' % limix.her.estimate(y, 'normal', K_all_tree, verbose=True))
     #print('h^2 %.3f' % limix.her.estimate(y, 'bernoulli', K_all, verbose=True))
-    #h^2 = 0.61
 
+    print("PC variance explained")
     # top PCs
+    # not run
     # for PCs (https://media.nature.com/original/nature-assets/srep/2016/160525/srep26471/extref/srep26471-s1.pdf)
     #   ev(Xa) = ev(Y) - v0 - v1 - psi(X(X'(v0 + v1)X)^-1*X')
     #   ev(Y) = psi(YY')
     #   psi(A) = (1/(n-1))*(tr(A) - 1/n*A)
-    QS = economic_qs(K_all)
+    #
+    # rand_var = glmm.v0 + glmm.v1
+    # evY = (1/(len(y) - 1)) * np.var(y)
+    # psi = lambda A, n: (1/(n - 1)) * (np.trace(A) - (1/n)*A)
+    # adjust = psi(np.dot(r, np.dot(np.linalg.inv(np.dot(r.T, r)/rand_var), r.T)), len(y))
+    # print(evY - rand_var)
+    # print(evY - rand_var - adjust)
 
-    glmm = GLMMExpFam(y, 'bernoulli', r.T, QS)
-    glmm.fit(verbose=True)
-    rand_var = glmm.v0 + glmm.v1
-    psi = lambda A, n: (1/(n - 1)) * (np.trace(A) - (1/n)*A)
-    evY = psi(np.dot(y, y.T), len(y))
-    adjust = psi(np.dot(r, np.dot(np.linalg.inv(np.dot(r.T, r)/rand_var), r.T)), len(y))
-    print(evY - rand_var)
-    print(evY - rand_var - adjust)
+    #QS = economic_qs(K_all_tree)
 
+    #glmm = GLMMExpFam(y, 'bernoulli', r.T, QS)
+    # does not converge
+    #glmm = LMM(y, r, QS)
+    #glmm.fit(verbose=True)
+    #print(glmm.fixed_effects_variance/(glmm.v0 + glmm.v1 + glmm.fixed_effects_variance))
+
+    print("Serotype variance explained")
     # serotype: cps locus 302490-323780
     #   w PCs
     #   w/o PCs
+
+    # from alignment
     sero_idx = np.where((positions >= 302490) & (positions <= 323780))[0]
-    G_sero = G_all[sero_idx,].T
-    print(calc_var_comp(y, G_sero, K_all, covar=None))
-    print(calc_var_comp(y, G_sero, K_all, covar=r['components']))
+    G_sero = G_all[sero_idx,:].T
+    print('h^2 %.3f' % limix.her.estimate(y, 'normal', np.dot(G_sero, G_sero.T), verbose=True))
+    #print(calc_var_comp(y, G_to_K(G_sero), K_all_vcf, covar=None))
+    #print(calc_var_comp(y, G_to_K(G_sero), K_all_vcf, covar=r))
+
+    # from tree
+    K_sero_tree = pd.read_table("cps_C.tsv", index_col = 0)
+    K_sero_tree = K_sero_tree.reindex(index=samples, columns=samples)
+    K_sero_tree = K_sero_tree.values
+
+    print('h^2 %.3f' % limix.her.estimate(y, 'normal', K_sero_tree, verbose=True))
+    #print(calc_var_comp(y, G_to_K(G_sero), K_all_tree, covar=None))
+    #print(calc_var_comp(y, G_to_K(G_sero), K_all_tree, covar=r))
+    print(calc_var_comp(y, K_sero_tree, K_all_tree, covar=None))
+    print(calc_var_comp(y, K_sero_tree, K_all_tree, covar=r))
+
+    # categorical
+    K_sero_cat = pd.read_table("sero_K_categorical.tsv", index_col = 0)
+    K_sero_cat = K_sero_cat.reindex(index=samples, columns=samples)
+    K_sero_cat = K_sero_cat.values
+    found = K_sero_cat.index in samples
+    print('h^2 %.3f' % limix.her.estimate(y[found], 'normal', K_sero_cat, verbose=True))
+    print(calc_var_comp(y[found], K_sero_cat, K_all_tree[found, found], covar=None))
+    print(calc_var_comp(y[found], K_sero_cat, K_all_tree[found, found], covar=r))
+
 
     # LoF
     #   aggregate LoF burden
@@ -144,7 +185,7 @@ def main():
     gene_burden_ac3 = []
     for gene_id in genes.keys():
         start, end = genes[gene_id]
-        gene_G = lof_mat[np.which(lof_mat_pos >= start & lof_mat_pos <= end), :]
+        gene_G = lof_mat[np.where(lof_mat_pos >= start & lof_mat_pos <= end), :]
         gene_burden.append(np.where(np.sum(gene_G, axis=0) > 0, 1, 0))
 
         var_counts = np.sum(gene_G, axis=1)
@@ -154,13 +195,13 @@ def main():
     gene_burden = np.array(gene_burden).T
     gene_burden_ac3 = np.array(gene_burden_ac3).T
 
-    print(calc_var_comp(y, gene_burden, K_all, covar=None))
-    print(calc_var_comp(y, gene_burden, K_all, covar=r['components']))
-    print(calc_var_comp(y, gene_burden_ac3, K_all, covar=None))
+    print(calc_var_comp(y, G_to_K(gene_burden), K_all, covar=None))
+    print(calc_var_comp(y, G_to_K(gene_burden), K_all, covar=r))
+    print(calc_var_comp(y, G_to_K(gene_burden_ac3), K_all, covar=None))
 
     for gene_id, gene_G in zip(genes.keys(), gene_burden):
         print(gene_id)
-        print(calc_var_comp(y, gene_G.T, K_all, covar=None))
+        print(calc_var_comp(y, G_to_K(gene_G.T), K_all, covar=None))
 
 if __name__ == '__main__':
     main()
