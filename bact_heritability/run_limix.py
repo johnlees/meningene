@@ -6,7 +6,7 @@ from collections import defaultdict, namedtuple
 
 import numpy as np
 import pandas as pd
-import limix
+import limix # requires v2
 from limix.stats import pca
 from numpy_sugar.linalg import economic_qs
 from glimix_core.glmm import GLMMExpFam
@@ -15,7 +15,7 @@ from glimix_core.lmm import LMM
 def G_to_K(G):
     if G.shape[0] > 10000:
         sys.stderr.write("Very long G - has it been transposed?\n")
-    return(np.dot(G, G.t))
+    return(np.dot(G, G.T))
 
 def calc_var_comp(y, K_part, K_all, covar=None):
     K_resid = limix.qc.normalise_covariance(K_all - K_part)
@@ -42,10 +42,11 @@ def calc_var_comp(y, K_part, K_all, covar=None):
 
 
 def main():
+
+    print("Reading input")
     # read in genotype matrix (GT only)
     #G_all = np.loadtxt("nl_fixed.mat.csv", delimiter=",")
     #np.save("G_all.npy", G_all)
-    print("Reading input")
     G_all = np.load("G_all.npy")
 
     # read in metadata for genotype matrix
@@ -77,7 +78,7 @@ def main():
         header = gene_file.readline()
         for line in gene_file:
             (chrom, start, end, gene_id) = line.rstrip().split("\t")
-            genes[gene_id] = start, end
+            genes[gene_id] = int(start), int(end)
 
 
     # Construct phenotype (special for NL data, as pheno can be inferred from sample name)
@@ -108,36 +109,21 @@ def main():
     #np.save("K_all.npy", K_all)
     K_all_vcf = np.load("K_all.npy")
 
-    #K = pd.read_table("nl_C_midpoint.txt", index_col = 0)
     K = pd.read_table("nl_C_vcf_fasttree.txt", index_col = 0)
     K = K.reindex(index=samples, columns=samples)
     K_all_tree = K.values
 
-    #print('h^2 %.3f' % limix.her.estimate(y, 'normal', K_all_tree, verbose=True))
-    #print('h^2 %.3f' % limix.her.estimate(y, 'bernoulli', K_all, verbose=True))
+    print('h^2 %.3f' % limix.her.estimate(y, 'normal', K_all_tree, verbose=True))
+    print('h^2 %.3f' % limix.her.estimate(y, 'bernoulli', K_all_tree, verbose=True))
 
     print("PC variance explained")
     # top PCs
-    # not run
-    # for PCs (https://media.nature.com/original/nature-assets/srep/2016/160525/srep26471/extref/srep26471-s1.pdf)
-    #   ev(Xa) = ev(Y) - v0 - v1 - psi(X(X'(v0 + v1)X)^-1*X')
-    #   ev(Y) = psi(YY')
-    #   psi(A) = (1/(n-1))*(tr(A) - 1/n*A)
-    #
-    # rand_var = glmm.v0 + glmm.v1
-    # evY = (1/(len(y) - 1)) * np.var(y)
-    # psi = lambda A, n: (1/(n - 1)) * (np.trace(A) - (1/n)*A)
-    # adjust = psi(np.dot(r, np.dot(np.linalg.inv(np.dot(r.T, r)/rand_var), r.T)), len(y))
-    # print(evY - rand_var)
-    # print(evY - rand_var - adjust)
 
-    #QS = economic_qs(K_all_tree)
+    QS = economic_qs(K_all_tree)
 
-    #glmm = GLMMExpFam(y, 'bernoulli', r.T, QS)
-    # does not converge
-    #glmm = LMM(y, r, QS)
-    #glmm.fit(verbose=True)
-    #print(glmm.fixed_effects_variance/(glmm.v0 + glmm.v1 + glmm.fixed_effects_variance))
+    glmm = LMM(y, r, QS)
+    glmm.fit(verbose=True)
+    print(glmm.fixed_effects_variance/(glmm.v0 + glmm.v1 + glmm.fixed_effects_variance))
 
     print("Serotype variance explained")
     # serotype: cps locus 302490-323780
@@ -147,61 +133,94 @@ def main():
     # from alignment
     sero_idx = np.where((positions >= 302490) & (positions <= 323780))[0]
     G_sero = G_all[sero_idx,:].T
-    print('h^2 %.3f' % limix.her.estimate(y, 'normal', np.dot(G_sero, G_sero.T), verbose=True))
-    #print(calc_var_comp(y, G_to_K(G_sero), K_all_vcf, covar=None))
-    #print(calc_var_comp(y, G_to_K(G_sero), K_all_vcf, covar=r))
+    print(calc_var_comp(y, G_to_K(G_sero), K_all_vcf, covar=None))
+    print(calc_var_comp(y, G_to_K(G_sero), K_all_vcf, covar=r))
 
     # from tree
     K_sero_tree = pd.read_table("cps_C.tsv", index_col = 0)
     K_sero_tree = K_sero_tree.reindex(index=samples, columns=samples)
     K_sero_tree = K_sero_tree.values
 
-    print('h^2 %.3f' % limix.her.estimate(y, 'normal', K_sero_tree, verbose=True))
-    #print(calc_var_comp(y, G_to_K(G_sero), K_all_tree, covar=None))
-    #print(calc_var_comp(y, G_to_K(G_sero), K_all_tree, covar=r))
+    # both tree branches at same scale
     print(calc_var_comp(y, K_sero_tree, K_all_tree, covar=None))
     print(calc_var_comp(y, K_sero_tree, K_all_tree, covar=r))
 
     # categorical
     K_sero_cat = pd.read_table("sero_K_categorical.tsv", index_col = 0)
+    found = np.isin(samples, K_sero_cat.index)
     K_sero_cat = K_sero_cat.reindex(index=samples, columns=samples)
     K_sero_cat = K_sero_cat.values
-    found = K_sero_cat.index in samples
-    print('h^2 %.3f' % limix.her.estimate(y[found], 'normal', K_sero_cat, verbose=True))
-    print(calc_var_comp(y[found], K_sero_cat, K_all_tree[found, found], covar=None))
-    print(calc_var_comp(y[found], K_sero_cat, K_all_tree[found, found], covar=r))
+    print('h^2 %.3f' % limix.her.estimate(y[found], 'bernoulli', K_sero_cat[found,:][:,found], verbose=True)) #h^2 = 0.495
+    #print('h^2 %.3f' % limix.her.estimate(y[found], 'bernoulli', K_sero_cat[found,:][:,found], M = r[found,:], verbose=True))# fails at iter 71
+    print('h^2 %.3f' % limix.her.estimate(y[found], 'bernoulli', K_sero_cat[found,:][:,found], M = r[found,1:3], verbose=True))#h^2 = 0.508
 
+    # fixed effects
+    sero_covars_cat = pd.read_table("serotype_covars.txt", index_col = 0)
+    assert(np.all(found == np.isin(samples, sero_covars_cat.index)))
+    sero_covars_cat = sero_covars_cat.reindex(index=samples)
+    sero_covars_cat = sero_covars_cat.values
 
+    # variance decomposition w/ serotype fixed effects
+    glmm = limix.glmm.GLMMComposer(len(y[found]))
+    glmm.y = y[found]
+    glmm.fixed_effects.append_offset()
+    glmm.fixed_effects.append(sero_covars_cat[found,:])
+    glmm.covariance_matrices.append(limix.qc.normalise_covariance(K_all_tree[found,:][:,found]))
+    glmm.covariance_matrices.append_iid_noise()
+    glmm.fit(verbose=False)
+    print(glmm) #LML: -781.7942874960014
+
+    glmm = limix.glmm.GLMMComposer(len(y[found]))
+    glmm.y = y[found]
+    glmm.fixed_effects.append_offset()
+    glmm.covariance_matrices.append(limix.qc.normalise_covariance(K_all_tree[found,:][:,found]))
+    glmm.covariance_matrices.append_iid_noise()
+    glmm.fit(verbose=False)
+    print(glmm) #LML: -870.4633045267495
+
+    print("Gene burden variance explained")
     # LoF
     #   aggregate LoF burden
     #       w PCs
     #       w/o PCs
+    #       <1% MAF only
     #       w/o singletons + doubletons
     #   LoF burden by gene
     lof_mat = G_all[lof_loc, :]
     lof_mat_pos = positions[lof_loc]
 
     gene_burden = []
+    gene_burden_af001 = []
     gene_burden_ac3 = []
     for gene_id in genes.keys():
         start, end = genes[gene_id]
-        gene_G = lof_mat[np.where(lof_mat_pos >= start & lof_mat_pos <= end), :]
+        gene_G = lof_mat[(lof_mat_pos >= start) & (lof_mat_pos <= end), :]
         gene_burden.append(np.where(np.sum(gene_G, axis=0) > 0, 1, 0))
 
         var_counts = np.sum(gene_G, axis=1)
-        gene_G_ac3 = geneG[:, var_counts > 2]
+        gene_G_af001 = gene_G[var_counts < 18, :]
+        gene_burden_af001.append(np.where(np.sum(gene_G_af001, axis=0) > 0, 1, 0))
+        gene_G_ac3 = gene_G[var_counts > 2, :]
         gene_burden_ac3.append(np.where(np.sum(gene_G_ac3, axis=0) > 0, 1, 0))
 
     gene_burden = np.array(gene_burden).T
+    gene_burden_af001 = np.array(gene_burden_af001).T
     gene_burden_ac3 = np.array(gene_burden_ac3).T
 
-    print(calc_var_comp(y, G_to_K(gene_burden), K_all, covar=None))
-    print(calc_var_comp(y, G_to_K(gene_burden), K_all, covar=r))
-    print(calc_var_comp(y, G_to_K(gene_burden_ac3), K_all, covar=None))
+    print(calc_var_comp(y, G_to_K(gene_burden), K_all_vcf, covar=None))
+    print(calc_var_comp(y, G_to_K(gene_burden), K_all_vcf, covar=r))
+    print(calc_var_comp(y, G_to_K(gene_burden_af001), K_all_vcf, covar=None))
+    print(calc_var_comp(y, G_to_K(gene_burden_af001), K_all_vcf, covar=r))
+    print(calc_var_comp(y, G_to_K(gene_burden_ac3), K_all_vcf, covar=None))
+    print(calc_var_comp(y, G_to_K(gene_burden_ac3), K_all_vcf, covar=r))
 
-    for gene_id, gene_G in zip(genes.keys(), gene_burden):
-        print(gene_id)
-        print(calc_var_comp(y, G_to_K(gene_G.T), K_all, covar=None))
+    for gene_id, gene_G in zip(genes.keys(), gene_burden.T):
+        try:
+            print(gene_id)
+            print(calc_var_comp(y, G_to_K(gene_G.reshape(-1,1)), K_all_vcf, covar=None))
+        except:
+            sys.stderr.write("Could not fit model\n")
+            sys.exit(0)
 
 if __name__ == '__main__':
     main()
